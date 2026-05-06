@@ -15,6 +15,7 @@
 - 将 Python 启动方式改为探测式选择，优先使用本机可用的 Python 3.11+，`uv` 仅作为兜底选项
 - 增加 LLM 参数整理规则，可根据用户 prompt 保守推断 `size`、`quality`、`background`、`output_format`、`n`、`input_fidelity`
 - 增加 `--model` 支持说明，允许在后端开放时指定如 `pro/gpt-image-2` 等模型
+- 默认优先使用 Responses API SSE 流式生成，降低长耗时图片请求被代理读超时中断的概率
 - 为 HTTP 请求补充 `Accept` 与 `User-Agent` 请求头，避免部分反代链路拒绝 Python 默认请求
 - 修正文档中的目录名、配置读取顺序和直接脚本调用示例
 
@@ -22,6 +23,7 @@
 
 - 支持文生图
 - 支持改图 / 编辑图片
+- 默认优先走流式 Responses API，必要时回退旧的非流式 Images API
 - 支持自动触发
 - 支持手动使用 `/gen-images ...`
 - 自动读取 Codex 当前 `model_provider` 配置中的 API Base URL 和 Token；必要时可回退 Claude Code 配置
@@ -75,8 +77,12 @@ python3 --version
 
 反代链路需要支持：
 
+- Codex 模式流式优先：`POST <base_url>/responses`
+- Claude Code 模式流式优先：`POST <base_url>/v1/responses`
 - Codex 模式：`POST <base_url>/images/generations`、`POST <base_url>/images/edits`
 - Claude Code 模式：`POST <base_url>/v1/images/generations`、`POST <base_url>/v1/images/edits`
+
+默认会先尝试 Responses API SSE 流式调用。如果该端点不支持、返回兼容性错误，或改图请求使用 `mask`，脚本会回退到原来的非流式 Images API。
 
 ## 目录结构
 
@@ -139,6 +145,17 @@ Codex 或其他 Agent 的安装目录以各自的 skill/插件加载规则为准
 python3.12 scripts/gen_images.py \
   --mode generate \
   --model pro/gpt-image-2 \
+  --prompt "一张透明背景的猫咪头像" \
+  --size 1024x1024 \
+  --output-format png
+```
+
+如需排查旧接口，可显式关闭流式：
+
+```bash
+python3.12 scripts/gen_images.py \
+  --mode generate \
+  --no-stream \
   --prompt "一张透明背景的猫咪头像" \
   --size 1024x1024 \
   --output-format png
@@ -219,7 +236,7 @@ auto
 
 ## 超时规则
 
-Bash 调用 `scripts/gen_images.py` 时，timeout 按图片尺寸自动设置。
+Bash 调用 `scripts/gen_images.py` 时，timeout 按图片尺寸自动设置。脚本内部默认走 SSE 流式，这可以让代理链路在长任务中更早收到响应字节；但如果上游在 Cloudflare 超时窗口内完全不 flush 任何事件，仍可能发生 524。
 
 统一规则以 `references/fields.md` 中的 `timeout 规则` 为准：
 - 总像素量 `>= 8000000` 的 4k 级尺寸使用 15 分钟
@@ -238,7 +255,7 @@ Bash 调用 `scripts/gen_images.py` 时，timeout 按图片尺寸自动设置。
 
 ```text
 图片已生成, 图片路径: C:\Users\xxx\gen-images\20260424-003204-01.png
-实际使用的关键参数: model=gpt-image-2, size=2160x3840, quality=high, output_format=png, n=1
+实际使用的关键参数: model=gpt-image-2, size=2160x3840, quality=high, output_format=png, n=1, stream=true
 ```
 
 失败时返回类似：
@@ -253,7 +270,8 @@ Bash 调用 `scripts/gen_images.py` 时，timeout 按图片尺寸自动设置。
 2. 本 skill 优先从 Codex 配置读取 API Base URL 和 Token，必要时回退 Claude Code 配置
 3. 使用前请确认 `CLIProxyAPI >= v6.9.34`
 4. `2160x3840` / `3840x2160` 为当前链路实测可用，不保证所有后端一致支持
-5. 如果复杂长提示词在超大尺寸下偶发失败，建议先做最小提示词对照测试
+5. 流式可以降低 524 风险，但不能绝对避免所有代理/源站超时；关键在于代理链路要把 SSE 事件及时 flush 出去
+6. 如果复杂长提示词在超大尺寸下偶发失败，建议先做最小提示词对照测试
 
 ## 相关文件
 

@@ -2,8 +2,8 @@
 
 ## 任务类型
 
-- 文生图：调用 `POST /v1/images/generations`
-- 改图：调用 `POST /v1/images/edits`
+- 文生图：默认优先调用 `POST /v1/responses` 的 SSE 流式 Responses API；代理不支持时回退 `POST /v1/images/generations`
+- 改图：默认优先调用 `POST /v1/responses` 的 SSE 流式 Responses API；代理不支持或使用 `mask` 时回退 `POST /v1/images/edits`
 
 如果用户表达包含明确的图片来源（本地路径、URL、data URL）且语义是“修改图片 / 编辑图片 / 改图”，优先识别为改图。
 
@@ -31,13 +31,13 @@
 
 - `model`：默认 `gpt-image-2`
 - `response_format`：默认 `b64_json`
-- `stream`：默认 `false`
+- `stream`：默认 `true`，可用 `--no-stream` 强制走旧的非流式 `/images/*` 接口
 - `size`
 - `quality`
 - `background`
 - `output_format`
 - `output_compression`
-- `partial_images`
+- `partial_images`：流式调用未显式传入时脚本默认使用 `1`
 - `n`：默认 `1`
 - `moderation`
 - `input_fidelity`（改图可用）
@@ -112,7 +112,7 @@
 
 - `model`：只有用户明确指定模型或明确要求使用 pro/某个模型名时才传
 - `moderation`：只有用户明确要求时才传
-- `partial_images`：只有用户明确要求流式/中间图时才传
+- `partial_images`：只有用户明确要求中间图数量时才传；否则交给脚本默认值
 
 ## timeout 规则
 
@@ -156,7 +156,7 @@ Bash 调用 `scripts/gen_images.py` 前，先根据 `size` 计算本次工具调
 
 成功后向用户报告：
 - `图片已生成, 图片路径: <路径>`
-- `实际使用的关键参数: model=..., size=..., quality=..., output_format=..., n=...`
+- `实际使用的关键参数: model=..., size=..., quality=..., output_format=..., n=..., stream=...`
 
 ## 失败输出格式
 

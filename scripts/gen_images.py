@@ -13,6 +13,15 @@ from datetime import datetime
 from pathlib import Path
 
 
+DEFAULT_MODEL = "gpt-image-2"
+
+
+class ApiHTTPError(RuntimeError):
+    def __init__(self, code: int, message: str):
+        self.code = code
+        super().__init__(f"HTTP {code}: {message}")
+
+
 def fail(message: str, status_code: int = 1):
     print(json.dumps({"ok": False, "error": message}, ensure_ascii=False))
     sys.exit(status_code)
@@ -120,6 +129,12 @@ def build_api_url(caller: str, base_url: str, mode: str):
     return f"{base_url}{endpoint}"
 
 
+def build_responses_url(caller: str, base_url: str):
+    if caller == "claude":
+        return f"{base_url}/v1/responses"
+    return f"{base_url}/responses"
+
+
 def guess_mime(path: Path):
     mime, _ = mimetypes.guess_type(str(path))
     return mime or "application/octet-stream"
@@ -133,6 +148,12 @@ def file_to_data_url(path_str: str):
     mime = guess_mime(path)
     b64 = base64.b64encode(data).decode("ascii")
     return f"data:{mime};base64,{b64}"
+
+
+def normalize_image_source(image_value: str):
+    if image_value.startswith("http://") or image_value.startswith("https://") or image_value.startswith("data:"):
+        return image_value
+    return file_to_data_url(image_value)
 
 
 DATA_URL_RE = re.compile(r"^data:(?P<mime>[^;]+);base64,(?P<data>.+)$", re.IGNORECASE)
@@ -195,6 +216,15 @@ def save_images(image_entries, output_format: str | None):
     return paths
 
 
+def read_http_error(exc: urllib.error.HTTPError):
+    try:
+        raw = exc.read().decode("utf-8")
+        data = json.loads(raw)
+        return data.get("error", {}).get("message") or data.get("message") or raw
+    except Exception:
+        return exc.reason or f"HTTP {exc.code}"
+
+
 def post_json(url: str, token: str, payload: dict):
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(
@@ -212,15 +242,86 @@ def post_json(url: str, token: str, payload: dict):
         with urllib.request.urlopen(req) as response:
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        try:
-            raw = exc.read().decode("utf-8")
-            data = json.loads(raw)
-            message = data.get("error", {}).get("message") or data.get("message") or raw
-        except Exception:
-            message = exc.reason or f"HTTP {exc.code}"
-        fail(f"接口调用失败: {message}")
+        fail(f"接口调用失败: {read_http_error(exc)}")
     except urllib.error.URLError as exc:
         fail(f"网络请求失败: {exc.reason}")
+
+
+def find_final_image_b64(value):
+    if isinstance(value, dict):
+        if value.get("type") == "image_generation_call":
+            result = value.get("result") or value.get("b64_json")
+            if isinstance(result, str) and result:
+                return result
+        for child in value.values():
+            result = find_final_image_b64(child)
+            if result:
+                return result
+    elif isinstance(value, list):
+        for child in value:
+            result = find_final_image_b64(child)
+            if result:
+                return result
+    return None
+
+
+def post_responses_stream(url: str, token: str, payload: dict):
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=body,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+            "User-Agent": "curl/8.7.1",
+            "Authorization": f"Bearer {token}",
+        },
+    )
+
+    latest_partial_b64 = None
+    final_b64 = None
+
+    try:
+        with urllib.request.urlopen(req) as response:
+            for raw_line in response:
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if not line or not line.startswith("data:"):
+                    continue
+
+                payload_str = line[5:].strip()
+                if payload_str == "[DONE]":
+                    break
+
+                try:
+                    event = json.loads(payload_str)
+                except json.JSONDecodeError:
+                    continue
+
+                event_type = event.get("type", "")
+                if event_type == "response.image_generation_call.partial_image":
+                    partial = event.get("partial_image_b64")
+                    if partial:
+                        latest_partial_b64 = partial
+                    continue
+
+                if event_type == "response.failed":
+                    error = event.get("response", {}).get("error") or event.get("error") or {}
+                    message = error.get("message") if isinstance(error, dict) else str(error)
+                    raise RuntimeError(message or "Responses 流式请求失败")
+
+                result = find_final_image_b64(event)
+                if result:
+                    final_b64 = result
+    except urllib.error.HTTPError as exc:
+        raise ApiHTTPError(exc.code, read_http_error(exc)) from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"网络请求失败: {exc.reason}") from exc
+
+    result_b64 = final_b64 or latest_partial_b64
+    if not result_b64:
+        raise RuntimeError("接口返回中未找到可保存的图片数据")
+    return result_b64
 
 
 def build_generation_payload(args):
@@ -228,7 +329,7 @@ def build_generation_payload(args):
         fail("缺少 prompt")
 
     payload = {
-        "model": args.model or "gpt-image-2",
+        "model": args.model or DEFAULT_MODEL,
         "prompt": args.prompt,
         "response_format": "b64_json",
         "stream": False,
@@ -257,12 +358,10 @@ def build_edit_payload(args):
     if not args.image:
         fail("缺少要编辑的图片来源")
 
-    image_value = args.image
-    if not image_value.startswith("http://") and not image_value.startswith("https://") and not image_value.startswith("data:"):
-        image_value = file_to_data_url(image_value)
+    image_value = normalize_image_source(args.image)
 
     payload = {
-        "model": args.model or "gpt-image-2",
+        "model": args.model or DEFAULT_MODEL,
         "prompt": args.prompt,
         "images": [{"image_url": image_value}],
         "response_format": "b64_json",
@@ -271,9 +370,7 @@ def build_edit_payload(args):
     }
 
     if args.mask:
-        mask_value = args.mask
-        if not mask_value.startswith("http://") and not mask_value.startswith("https://") and not mask_value.startswith("data:"):
-            mask_value = file_to_data_url(mask_value)
+        mask_value = normalize_image_source(args.mask)
         payload["mask"] = {"image_url": mask_value}
 
     optional_fields = [
@@ -293,6 +390,57 @@ def build_edit_payload(args):
     return payload
 
 
+def build_responses_payload(args, default_partial_images: bool = True):
+    if not args.prompt:
+        fail("缺少 prompt")
+
+    tool_cfg = {"type": "image_generation"}
+    if args.size and args.size != "auto":
+        tool_cfg["size"] = args.size
+
+    optional_fields = [
+        "quality",
+        "background",
+        "output_format",
+        "output_compression",
+        "moderation",
+        "input_fidelity",
+    ]
+    for field in optional_fields:
+        value = getattr(args, field, None)
+        if value is not None:
+            tool_cfg[field] = value
+
+    # Ask the backend to flush at least one image event, reducing proxy
+    # read-timeout risk for long generations.
+    if args.partial_images is not None:
+        tool_cfg["partial_images"] = args.partial_images
+    elif default_partial_images:
+        tool_cfg["partial_images"] = 1
+
+    if args.mode == "generate":
+        input_data = args.prompt
+    else:
+        if not args.image:
+            fail("缺少要编辑的图片来源")
+        input_data = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_image", "image_url": normalize_image_source(args.image)},
+                    {"type": "input_text", "text": args.prompt},
+                ],
+            }
+        ]
+
+    return {
+        "model": args.model or DEFAULT_MODEL,
+        "input": input_data,
+        "tools": [tool_cfg],
+        "stream": True,
+    }
+
+
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=["generate", "edit"], required=True)
@@ -309,6 +457,7 @@ def parse_args():
     parser.add_argument("--n", type=int)
     parser.add_argument("--moderation")
     parser.add_argument("--input-fidelity", dest="input_fidelity")
+    parser.add_argument("--stream", action=argparse.BooleanOptionalAction, default=True)
     return parser.parse_args()
 
 
@@ -319,30 +468,57 @@ def main():
     except RuntimeError as exc:
         fail(str(exc))
 
-    if args.mode == "generate":
-        payload = build_generation_payload(args)
-    else:
-        payload = build_edit_payload(args)
+    stream_used = False
+    response = None
 
-    url = build_api_url(caller, base_url, args.mode)
+    if args.stream and not (args.mode == "edit" and args.mask):
+        try:
+            url = build_responses_url(caller, base_url)
+            image_entries = []
+            for _ in range(args.n or 1):
+                try:
+                    payload = build_responses_payload(args)
+                    b64_json = post_responses_stream(url, token, payload)
+                except ApiHTTPError as exc:
+                    if args.partial_images is not None or exc.code not in (400, 422):
+                        raise
+                    payload = build_responses_payload(args, default_partial_images=False)
+                    b64_json = post_responses_stream(url, token, payload)
+                image_entries.append({"b64_json": b64_json})
+            response = {"data": image_entries}
+            stream_used = True
+        except ApiHTTPError as exc:
+            if exc.code not in (400, 404, 405, 415, 422):
+                fail(f"接口调用失败: {exc}")
+        except RuntimeError as exc:
+            fail(str(exc))
 
-    response = post_json(url, token, payload)
+    if response is None:
+        if args.mode == "generate":
+            payload = build_generation_payload(args)
+        else:
+            payload = build_edit_payload(args)
+
+        url = build_api_url(caller, base_url, args.mode)
+        response = post_json(url, token, payload)
+
     data = response.get("data")
     if not isinstance(data, list) or not data:
         fail("接口返回中缺少 data")
 
     used_params = {
-        "model": payload.get("model", "gpt-image-2"),
-        "size": payload.get("size"),
-        "quality": payload.get("quality"),
-        "background": payload.get("background"),
-        "output_format": payload.get("output_format") or "png",
-        "n": payload.get("n", 1),
+        "model": args.model or DEFAULT_MODEL,
+        "size": args.size,
+        "quality": args.quality,
+        "background": args.background,
+        "output_format": args.output_format or "png",
+        "n": args.n or 1,
+        "stream": stream_used,
     }
-    if args.mode == "edit" and payload.get("input_fidelity") is not None:
-        used_params["input_fidelity"] = payload.get("input_fidelity")
+    if args.mode == "edit" and args.input_fidelity is not None:
+        used_params["input_fidelity"] = args.input_fidelity
 
-    paths = save_images(data, payload.get("output_format"))
+    paths = save_images(data, args.output_format)
     print(json.dumps({"ok": True, "paths": paths, "used_params": used_params}, ensure_ascii=False))
 
 

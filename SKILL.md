@@ -152,7 +152,7 @@ allowed-tools: [Bash, Read]
 
 保守原则：
 - 不要仅因为 prompt 很长就自动选择 4k；只有用户用途明显需要壁纸、大幅展示、16:9/9:16，或明确提到 4k 时才用 4k 尺寸。
-- 不要擅自推断 `model`、`moderation`、`partial_images`。这些字段只有用户明确要求时才传。
+- 不要擅自推断 `model`、`moderation`、`partial_images`。`partial_images` 只有用户明确要求中间图数量时才传；否则交给脚本默认值。
 - `output_compression` 只在用户明确要求压缩、小体积、控制文件大小，且输出格式为 `jpg/jpeg/webp` 时传。
 - `output_format` 优先按用户明确要求；若推断 `background=transparent` 且用户未指定格式，使用 `png`。
 - 推断出的字段只作为接口参数传递，不要从原始 prompt 中删除对应语义；prompt 应尽量保留用户完整意图。
@@ -278,6 +278,7 @@ $python_cmd "<skill-dir>/scripts/gen_images.py" --mode edit --prompt "..." --ima
 - `--moderation`
 - `--output-compression`
 - `--partial-images`
+- `--no-stream`（仅在用户明确要求非流式或 Responses 端点不可用排查时使用）
 - `--input-fidelity`
 - `--mask`
 
@@ -290,8 +291,10 @@ $python_cmd "<skill-dir>/scripts/gen_images.py" --mode edit --prompt "..." --ima
 - Codex 调用时再读取 `~/.codex/auth.json` 中的 `OPENAI_API_KEY`
 - 如果无法判定当前调用者，则按回退顺序先尝试 Codex 配置，再尝试 Claude 配置
 - 使用 `Authorization: Bearer <token>` 调用接口
-- Claude 调用时，文生图走 `/v1/images/generations`，改图走 `/v1/images/edits`
-- Codex 调用时，文生图直接走 `/images/generations`，改图直接走 `/images/edits`
+- 默认优先走 Responses API SSE 流式：Claude 调用 `/v1/responses`，Codex 调用 `/responses`
+- 如果 Responses 端点不支持、返回兼容性错误，或改图请求使用 `mask`，回退旧的非流式 Images API
+- Images API 回退路径：Claude 文生图走 `/v1/images/generations`，改图走 `/v1/images/edits`
+- Images API 回退路径：Codex 文生图直接走 `/images/generations`，改图直接走 `/images/edits`
 - 将返回图片保存到当前工作目录下的 `./gen-images/`
 - 输出 JSON 结果
 
@@ -300,7 +303,7 @@ $python_cmd "<skill-dir>/scripts/gen_images.py" --mode edit --prompt "..." --ima
 脚本成功时会输出 JSON，例如：
 
 ```json
-{"ok": true, "paths": ["..."], "used_params": {"model": "gpt-image-2", "size": "1024x1024", "quality": "high", "output_format": "png", "n": 1}}
+{"ok": true, "paths": ["..."], "used_params": {"model": "gpt-image-2", "size": "1024x1024", "quality": "high", "output_format": "png", "n": 1, "stream": true}}
 ```
 
 脚本失败时会输出 JSON，例如：
@@ -314,7 +317,7 @@ $python_cmd "<skill-dir>/scripts/gen_images.py" --mode edit --prompt "..." --ima
 向用户输出：
 
 - `图片已生成, 图片路径: <路径>`
-- `实际使用的关键参数: model=..., size=..., quality=..., output_format=..., n=...`
+- `实际使用的关键参数: model=..., size=..., quality=..., output_format=..., n=..., stream=...`
 
 如果生成多张图片，列出所有路径。
 
