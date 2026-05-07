@@ -8,13 +8,29 @@ import re
 import sys
 import tomllib
 import urllib.error
-import urllib.parse
 import urllib.request
 from datetime import datetime
 from pathlib import Path
 
 
 DEFAULT_MODEL = "gpt-image-2"
+IMAGE_FIELDS = [
+    "size",
+    "quality",
+    "background",
+    "output_format",
+    "output_compression",
+    "partial_images",
+    "moderation",
+]
+RESPONSES_TOOL_FIELDS = [
+    "quality",
+    "background",
+    "output_format",
+    "output_compression",
+    "moderation",
+    "input_fidelity",
+]
 
 
 class RuntimeSettings:
@@ -261,28 +277,14 @@ def load_runtime_settings(args):
     raise RuntimeError("; ".join(errors))
 
 
-def build_api_url(base_url: str, mode: str):
-    endpoint = "/images/generations" if mode == "generate" else "/images/edits"
-    return f"{base_url}{endpoint}"
-
-
-def build_responses_url(base_url: str):
-    return f"{base_url}/responses"
-
-
-def guess_mime(path: Path):
-    mime, _ = mimetypes.guess_type(str(path))
-    return mime or "application/octet-stream"
-
-
 def file_to_data_url(path_str: str):
     path = Path(path_str)
     if not path.exists():
         fail(f"图片文件不存在: {path_str}")
     data = path.read_bytes()
-    mime = guess_mime(path)
+    mime, _ = mimetypes.guess_type(str(path))
     b64 = base64.b64encode(data).decode("ascii")
-    return f"data:{mime};base64,{b64}"
+    return f"data:{mime or 'application/octet-stream'};base64,{b64}"
 
 
 def normalize_image_source(image_value: str):
@@ -320,14 +322,9 @@ def choose_extension(output_format: str | None, mime: str | None = None):
     return "png"
 
 
-def ensure_output_dir():
+def save_images(image_entries, output_format: str | None):
     output_dir = Path.cwd() / "gen-images"
     output_dir.mkdir(parents=True, exist_ok=True)
-    return output_dir
-
-
-def save_images(image_entries, output_format: str | None):
-    output_dir = ensure_output_dir()
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     paths = []
 
@@ -360,19 +357,23 @@ def read_http_error(exc: urllib.error.HTTPError):
         return exc.reason or f"HTTP {exc.code}"
 
 
-def post_json(url: str, token: str, payload: dict):
+def build_request(url: str, token: str, payload: dict, accept: str):
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    req = urllib.request.Request(
+    return urllib.request.Request(
         url,
         data=body,
         method="POST",
         headers={
             "Content-Type": "application/json",
-            "Accept": "application/json",
+            "Accept": accept,
             "User-Agent": "curl/8.7.1",
             "Authorization": f"Bearer {token}",
         },
     )
+
+
+def post_json(url: str, token: str, payload: dict):
+    req = build_request(url, token, payload, "application/json")
     try:
         with urllib.request.urlopen(req) as response:
             return json.loads(response.read().decode("utf-8"))
@@ -401,19 +402,7 @@ def find_final_image_b64(value):
 
 
 def post_responses_stream(url: str, token: str, payload: dict):
-    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=body,
-        method="POST",
-        headers={
-            "Content-Type": "application/json",
-            "Accept": "text/event-stream",
-            "User-Agent": "curl/8.7.1",
-            "Authorization": f"Bearer {token}",
-        },
-    )
-
+    req = build_request(url, token, payload, "text/event-stream")
     latest_partial_b64 = None
     final_b64 = None
 
@@ -459,7 +448,14 @@ def post_responses_stream(url: str, token: str, payload: dict):
     return result_b64
 
 
-def build_generation_payload(args):
+def add_optional_fields(target: dict, args, fields):
+    for field in fields:
+        value = getattr(args, field, None)
+        if value is not None:
+            target[field] = value
+
+
+def build_images_payload(args):
     if not args.prompt:
         fail("缺少 prompt")
 
@@ -471,57 +467,16 @@ def build_generation_payload(args):
         "n": args.n or 1,
     }
 
-    optional_fields = [
-        "size",
-        "quality",
-        "background",
-        "output_format",
-        "output_compression",
-        "partial_images",
-        "moderation",
-    ]
-    for field in optional_fields:
-        value = getattr(args, field, None)
-        if value is not None:
-            payload[field] = value
-    return payload
+    fields = list(IMAGE_FIELDS)
+    if args.mode == "edit":
+        if not args.image:
+            fail("缺少要编辑的图片来源")
+        payload["images"] = [{"image_url": normalize_image_source(args.image)}]
+        fields.append("input_fidelity")
+        if args.mask:
+            payload["mask"] = {"image_url": normalize_image_source(args.mask)}
 
-
-def build_edit_payload(args):
-    if not args.prompt:
-        fail("缺少 prompt")
-    if not args.image:
-        fail("缺少要编辑的图片来源")
-
-    image_value = normalize_image_source(args.image)
-
-    payload = {
-        "model": args.model or DEFAULT_MODEL,
-        "prompt": args.prompt,
-        "images": [{"image_url": image_value}],
-        "response_format": "b64_json",
-        "stream": False,
-        "n": args.n or 1,
-    }
-
-    if args.mask:
-        mask_value = normalize_image_source(args.mask)
-        payload["mask"] = {"image_url": mask_value}
-
-    optional_fields = [
-        "size",
-        "quality",
-        "background",
-        "output_format",
-        "output_compression",
-        "partial_images",
-        "moderation",
-        "input_fidelity",
-    ]
-    for field in optional_fields:
-        value = getattr(args, field, None)
-        if value is not None:
-            payload[field] = value
+    add_optional_fields(payload, args, fields)
     return payload
 
 
@@ -533,18 +488,7 @@ def build_responses_payload(args, default_partial_images: bool = True):
     if args.size and args.size != "auto":
         tool_cfg["size"] = args.size
 
-    optional_fields = [
-        "quality",
-        "background",
-        "output_format",
-        "output_compression",
-        "moderation",
-        "input_fidelity",
-    ]
-    for field in optional_fields:
-        value = getattr(args, field, None)
-        if value is not None:
-            tool_cfg[field] = value
+    add_optional_fields(tool_cfg, args, RESPONSES_TOOL_FIELDS)
 
     # Ask the backend to flush at least one image event, reducing proxy
     # read-timeout risk for long generations.
@@ -631,7 +575,7 @@ def main():
 
     if args.stream and not (args.mode == "edit" and args.mask):
         try:
-            url = build_responses_url(settings.base_url)
+            url = f"{settings.base_url}/responses"
             image_entries = []
             for _ in range(args.n or 1):
                 try:
@@ -652,12 +596,9 @@ def main():
             fail(str(exc))
 
     if response is None:
-        if args.mode == "generate":
-            payload = build_generation_payload(args)
-        else:
-            payload = build_edit_payload(args)
-
-        url = build_api_url(settings.base_url, args.mode)
+        payload = build_images_payload(args)
+        endpoint = "/images/generations" if args.mode == "generate" else "/images/edits"
+        url = f"{settings.base_url}{endpoint}"
         response = post_json(url, settings.token, payload)
 
     data = response.get("data")
