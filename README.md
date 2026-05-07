@@ -2,6 +2,8 @@
 
 给 Codex / Claude Code 用的图片生成 / 改图 skill，适用于通过 CLIProxyAPI 调用 `gpt-image-2` 的场景。
 
+![gen-images 架构图](assets/architecture.png)
+
 ## 来源与改动说明
 
 本项目基于 Linux.do 讨论帖整理和改造：
