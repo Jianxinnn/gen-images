@@ -1,4 +1,4 @@
-# gen-images 字段与交互规则
+# figforge-gen 字段与交互规则
 
 > API 配置(`base_url` / `api_key` / 优先级 / 原子性 / 预检)见 `api-config.md`。
 
@@ -35,7 +35,7 @@
 
 **本地保存字段:**
 
-- `out_dir`:只传 `--out-dir`,**不进入 API payload**;未指定时使用 `<task_cwd>/gen-images/`
+- `out_dir`:只传 `--out-dir`,**不进入 API payload**;未指定时使用 `<task_cwd>/figforge-gen/`
 
 **不要写入 API 配置文件:** `size`、`quality`、`output_format`、`out_dir` 等生成/本地参数。它们由用户自然语言、LLM 保守推断、命令行参数控制。
 
@@ -91,7 +91,7 @@
 ### out_dir
 
 - 先确定 `task_cwd`(用户当前打开的项目/工作区目录,**不是** skill 安装目录、脚本目录、`$CODEX_HOME`)
-- 用户未指定 → `<task_cwd>/gen-images`
+- 用户未指定 → `<task_cwd>/figforge-gen`
 - 用户说 `保存到`、`输出到`、`放到` 某目录 → 该目录;相对路径按 `task_cwd` 解析
 
 ### input_fidelity(仅改图)
@@ -130,7 +130,7 @@
 
 ## timeout 规则
 
-Bash 调用 `scripts/gen_images.py` 前,根据 `size` × `n` 计算本次 Bash 工具调用的 `timeout`:
+Bash 调用 `scripts/figforge_gen.py` 前,根据 `size` × `n` 计算本次 Bash 工具调用的 `timeout`:
 
 | 条件 | 单张基准 |
 |------|---------|

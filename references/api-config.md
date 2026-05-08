@@ -1,14 +1,14 @@
-# gen-images API 配置
+# figforge-gen API 配置
 
 ## 优先级链(从高到低)
 
 1. **命令行参数**:`--api-base`、`--api-key`、`--api-key-env`、`--model`
-2. **独立环境变量**:`GEN_IMAGES_API_BASE`、`GEN_IMAGES_API_KEY`、`GEN_IMAGES_MODEL`
+2. **独立环境变量**:`FIGFORGE_GEN_API_BASE`、`FIGFORGE_GEN_API_KEY`、`FIGFORGE_GEN_MODEL`
 3. **独立配置文件**:
-   - `$GEN_IMAGES_CONFIG`
-   - `$XDG_CONFIG_HOME/gen-images/config.toml`
-   - `~/.config/gen-images/config.toml`
-   - `~/.gen-images/config.toml`
+   - `$FIGFORGE_GEN_CONFIG`
+   - `$XDG_CONFIG_HOME/figforge-gen/config.toml`
+   - `~/.config/figforge-gen/config.toml`
+   - `~/.figforge-gen/config.toml`
 4. **Codex 配置**:`~/.codex/config.toml` + `~/.codex/auth.json`
    - 需要 `model_provider`、`model_providers.<当前 provider>.base_url`、`OPENAI_API_KEY`(provider 名不要求是 `OpenAI`)
 5. **Claude Code 配置**:`~/.claude/settings.json` 中 `env.ANTHROPIC_BASE_URL` + `env.ANTHROPIC_AUTH_TOKEN`
@@ -41,7 +41,7 @@ API 连接配置只包含:
 每次会话首次调用前:
 
 ```bash
-zsh -lc 'source ~/.zshrc >/dev/null 2>&1 || true; cd "<task-cwd>" || exit 1; python_cmd=$(bash "<skill-dir>/scripts/choose_python.sh") || { echo "未找到可用 Python 3.11+"; exit 1; }; python_argv=(${=python_cmd}); "${python_argv[@]}" "<skill-dir>/scripts/gen_images.py" --show-config'
+zsh -lc 'source ~/.zshrc >/dev/null 2>&1 || true; cd "<task-cwd>" || exit 1; python_cmd=$(bash "<skill-dir>/scripts/choose_python.sh") || { echo "未找到可用 Python 3.11+"; exit 1; }; python_argv=(${=python_cmd}); "${python_argv[@]}" "<skill-dir>/scripts/figforge_gen.py" --show-config'
 ```
 
 只检查输出 JSON 的:
@@ -63,19 +63,19 @@ zsh -lc 'source ~/.zshrc >/dev/null 2>&1 || true; cd "<task-cwd>" || exit 1; pyt
 
 ## 推荐配置
 
-`~/.config/gen-images/config.toml`:
+`~/.config/figforge-gen/config.toml`:
 
 ```toml
 [api]
 base_url = "https://your-api-base/v1"
-api_key_env = "GEN_IMAGES_API_KEY"
+api_key_env = "FIGFORGE_GEN_API_KEY"
 model = "gpt-image-2"
 ```
 
 shell 中:
 
 ```bash
-export GEN_IMAGES_API_KEY="sk-..."
+export FIGFORGE_GEN_API_KEY="sk-..."
 ```
 
 `base_url` 应填版本化的 API base(如 `https://your-api-base/v1`),脚本会自动拼接 `/responses`、`/images/generations`、`/images/edits`。

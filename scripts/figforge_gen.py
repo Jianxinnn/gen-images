@@ -83,27 +83,27 @@ def get_config_paths(args):
     if args.config:
         return [(Path(args.config).expanduser(), True, "--config")]
 
-    env_path = os.environ.get("GEN_IMAGES_CONFIG")
+    env_path = os.environ.get("FIGFORGE_GEN_CONFIG")
     if env_path:
-        return [(Path(env_path).expanduser(), True, "GEN_IMAGES_CONFIG")]
+        return [(Path(env_path).expanduser(), True, "FIGFORGE_GEN_CONFIG")]
 
     paths = []
     xdg_config_home = os.environ.get("XDG_CONFIG_HOME")
     if xdg_config_home:
-        paths.append((Path(xdg_config_home).expanduser() / "gen-images" / "config.toml", False, "XDG_CONFIG_HOME"))
+        paths.append((Path(xdg_config_home).expanduser() / "figforge-gen" / "config.toml", False, "XDG_CONFIG_HOME"))
     paths.extend([
-        (Path.home() / ".config" / "gen-images" / "config.toml", False, "user config"),
-        (Path.home() / ".gen-images" / "config.toml", False, "legacy user config"),
+        (Path.home() / ".config" / "figforge-gen" / "config.toml", False, "user config"),
+        (Path.home() / ".figforge-gen" / "config.toml", False, "alternate user config"),
     ])
     return paths
 
 
-def load_gen_images_config(args):
+def load_figforge_gen_config(args):
     for path, required, source in get_config_paths(args):
         if path.exists():
-            return flatten_api_config(load_toml(path, f"gen-images config ({source})")), path
+            return flatten_api_config(load_toml(path, f"figforge-gen config ({source})")), path
         if required:
-            raise RuntimeError(f"未找到 gen-images 配置文件: {path}")
+            raise RuntimeError(f"未找到 figforge-gen 配置文件: {path}")
     return {}, None
 
 
@@ -131,7 +131,7 @@ def read_env_token(env_name: str | None, source: str):
 def resolve_model(args, config: dict):
     return (
         args.model
-        or os.environ.get("GEN_IMAGES_MODEL")
+        or os.environ.get("FIGFORGE_GEN_MODEL")
         or get_config_value(config, "model")
         or DEFAULT_MODEL
     )
@@ -140,7 +140,7 @@ def resolve_model(args, config: dict):
 def load_direct_settings(args, config: dict, config_path: Path | None, model: str):
     base_url = (
         args.api_base
-        or os.environ.get("GEN_IMAGES_API_BASE")
+        or os.environ.get("FIGFORGE_GEN_API_BASE")
         or get_config_value(config, "base_url", "api_base")
     )
 
@@ -152,24 +152,24 @@ def load_direct_settings(args, config: dict, config_path: Path | None, model: st
         token_source = "--api-key"
     elif args.api_key_env:
         token, token_source = read_env_token(args.api_key_env, "--api-key-env")
-    elif os.environ.get("GEN_IMAGES_API_KEY"):
-        token = os.environ["GEN_IMAGES_API_KEY"]
-        token_source = "GEN_IMAGES_API_KEY"
+    elif os.environ.get("FIGFORGE_GEN_API_KEY"):
+        token = os.environ["FIGFORGE_GEN_API_KEY"]
+        token_source = "FIGFORGE_GEN_API_KEY"
     else:
         config_key_env = get_config_value(config, "api_key_env", "token_env")
         if config_key_env:
-            token, token_source = read_env_token(config_key_env, "gen-images config api_key_env")
+            token, token_source = read_env_token(config_key_env, "figforge-gen config api_key_env")
         else:
             token = get_config_value(config, "api_key", "token")
             if token:
-                token_source = "gen-images config api_key"
+                token_source = "figforge-gen config api_key"
 
     has_direct_config = any([
         args.api_base,
         args.api_key,
         args.api_key_env,
-        os.environ.get("GEN_IMAGES_API_BASE"),
-        os.environ.get("GEN_IMAGES_API_KEY"),
+        os.environ.get("FIGFORGE_GEN_API_BASE"),
+        os.environ.get("FIGFORGE_GEN_API_KEY"),
         get_config_value(config, "base_url", "api_base", "api_key", "token", "api_key_env", "token_env"),
     ])
 
@@ -177,19 +177,19 @@ def load_direct_settings(args, config: dict, config_path: Path | None, model: st
         return None
 
     if not base_url:
-        raise RuntimeError("已检测到 gen-images 独立 API 配置，但缺少 base_url")
+        raise RuntimeError("已检测到 figforge-gen 独立 API 配置，但缺少 base_url")
     if not token:
-        hint = "请设置 api_key、api_key_env，或环境变量 GEN_IMAGES_API_KEY"
+        hint = "请设置 api_key、api_key_env，或环境变量 FIGFORGE_GEN_API_KEY"
         if config_path:
             hint = f"{hint}；当前配置文件: {config_path}"
-        raise RuntimeError(f"已检测到 gen-images 独立 API 配置，但缺少 API key。{hint}")
+        raise RuntimeError(f"已检测到 figforge-gen 独立 API 配置，但缺少 API key。{hint}")
 
-    source_parts = ["gen-images"]
+    source_parts = ["figforge-gen"]
     if config_path:
         source_parts.append(str(config_path))
     if args.api_base or args.api_key or args.api_key_env:
         source_parts.append("cli")
-    if os.environ.get("GEN_IMAGES_API_BASE") or os.environ.get("GEN_IMAGES_API_KEY"):
+    if os.environ.get("FIGFORGE_GEN_API_BASE") or os.environ.get("FIGFORGE_GEN_API_KEY"):
         source_parts.append("env")
     source_parts.append(token_source or "token")
     return RuntimeSettings("+".join(source_parts), str(base_url), token, model)
@@ -254,7 +254,7 @@ def detect_caller_from_script_dir():
 
 
 def load_runtime_settings(args):
-    config, config_path = load_gen_images_config(args)
+    config, config_path = load_figforge_gen_config(args)
     model = resolve_model(args, config)
 
     direct_settings = load_direct_settings(args, config, config_path, model)
@@ -328,7 +328,7 @@ def resolve_output_dir(out_dir: str | None):
         if not output_dir.is_absolute():
             output_dir = Path.cwd() / output_dir
         return output_dir
-    return Path.cwd() / "gen-images"
+    return Path.cwd() / "figforge-gen"
 
 
 def save_images(image_entries, output_format: str | None, output_dir: Path):
