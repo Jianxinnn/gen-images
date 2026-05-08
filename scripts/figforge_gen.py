@@ -44,6 +44,7 @@ class RuntimeSettings:
 class ApiHTTPError(RuntimeError):
     def __init__(self, code: int, message: str):
         self.code = code
+        self.message = message
         super().__init__(f"HTTP {code}: {message}")
 
 
@@ -164,13 +165,21 @@ def load_direct_settings(args, config: dict, config_path: Path | None, model: st
             if token:
                 token_source = "figforge-gen config api_key"
 
+    config_value = get_config_value(
+        config,
+        "base_url",
+        "api_base",
+        "api_key",
+        "token",
+        "api_key_env",
+        "token_env",
+    )
     has_direct_config = any([
         args.api_base,
         args.api_key,
         args.api_key_env,
         os.environ.get("FIGFORGE_GEN_API_BASE"),
-        os.environ.get("FIGFORGE_GEN_API_KEY"),
-        get_config_value(config, "base_url", "api_base", "api_key", "token", "api_key_env", "token_env"),
+        config_value,
     ])
 
     if not has_direct_config:
@@ -465,6 +474,14 @@ def post_responses_stream(url: str, token: str, payload: dict):
     return result_b64
 
 
+def should_fall_back_to_images(error: ApiHTTPError):
+    if error.code in (400, 404, 405, 415, 422):
+        return True
+    if error.code == 503 and "/v1/images/generations" in error.message:
+        return True
+    return False
+
+
 def add_optional_fields(target: dict, args, fields):
     for field in fields:
         value = getattr(args, field, None)
@@ -640,7 +657,7 @@ def main():
             response = {"data": image_entries}
             stream_used = True
         except ApiHTTPError as exc:
-            if exc.code not in (400, 404, 405, 415, 422):
+            if not should_fall_back_to_images(exc):
                 fail(f"接口调用失败: {exc}")
         except RuntimeError as exc:
             fail(str(exc))

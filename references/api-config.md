@@ -90,5 +90,10 @@ export FIGFORGE_GEN_API_KEY="sk-..."
 回退条件:
 
 - Responses 端点返回兼容性错误(400/404/405/415/422)
+- Responses 端点返回明确的 Images-only 兼容错误(例如 `gpt-image-2 is only supported on /v1/images/generations and /v1/images/edits`)
 - 改图请求带 `mask`
 - 用户传 `--no-stream`
+
+如果只设置了 `FIGFORGE_GEN_API_KEY` 但没有 `FIGFORGE_GEN_API_BASE` 或配置文件
+`base_url`,脚本不会把它当作完整独立配置;这允许旧环境变量残留时继续回退到
+Codex / Claude 配置。完整独立配置仍必须提供匹配的 `base_url` 与 token 来源。
